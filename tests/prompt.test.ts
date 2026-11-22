@@ -49,6 +49,22 @@ describe('buildSystemPrompt — character mode', () => {
     expect(p).toContain('Yuji and Todo are confronting Mahito in Shibuya.');
   });
 
+  it('shows the character roster and only applicable character details', () => {
+    const p = buildSystemPrompt({
+      ...base,
+      mode: 'narrator',
+      characterRoster: ['ariel', 'blake', 'flare', 'rem'],
+      applicableCharacters: [{
+        name: 'flare',
+        content: 'Flare is Princess of Avax.',
+      }],
+    });
+    expect(p).toContain('## Character Roster');
+    expect(p).toContain('- flare');
+    expect(p).toContain('## Applicable Character Details');
+    expect(p).toContain('Flare is Princess of Avax.');
+  });
+
   it('tells the model not to speak or act for the player (both modes)', () => {
     for (const mode of ['character', 'narrator'] as const) {
       const p = buildSystemPrompt({ ...base, mode });

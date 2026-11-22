@@ -6,6 +6,8 @@ import { loadConfig } from '../src/config.js';
 import {
   listLocations,
   listStoryFolders,
+  loadApplicableCharacters,
+  loadCharacterCatalog,
   loadContent,
   nextNumberedJsonName,
 } from '../src/loaders.js';
@@ -24,15 +26,31 @@ describe('numbered save filenames', () => {
 describe('story discovery', () => {
   it('lists story folders but excludes app and dependency directories', async () => {
     const folders = await listStoryFolders(process.cwd());
-    expect(folders).toContain('sample_1');
-    expect(folders).toContain('shibuya_end_fight');
+    expect(folders).toContain('story_sample_1');
+    expect(folders).toContain('story_shibuya_end_fight');
     for (const excluded of ['dist', 'node_modules', 'src', 'tests']) {
       expect(folders).not.toContain(excluded);
     }
+    expect(folders).not.toContain('journeyAI');
+  });
+
+  describe('character context', () => {
+    it('lists all character names but loads full details only for applicable characters', async () => {
+      const storyDir = path.resolve(process.cwd(), 'story_demon_hunter');
+      const roster = await loadCharacterCatalog(storyDir);
+      expect(roster).toEqual(['ariel', 'blake', 'flare', 'rem']);
+
+      const flare = await loadApplicableCharacters(storyDir, null, 'Flare steps forward.');
+      expect(flare.map((character) => character.name)).toEqual(['flare']);
+      expect(flare[0].content).toContain('Princess of Avax');
+
+      const noCharacter = await loadApplicableCharacters(storyDir, null, 'The forest is quiet.');
+      expect(noCharacter).toEqual([]);
+    });
   });
 
   it('lists location files and prefers markdown when available', async () => {
-    const locations = await listLocations(path.resolve(process.cwd(), 'shibuya_end_fight'));
+    const locations = await listLocations(path.resolve(process.cwd(), 'story_shibuya_end_fight'));
     expect(locations).toEqual([{
       stem: 'shibuya',
       preferredFile: 'shibuya.md',
@@ -116,7 +134,7 @@ describe('loadContent', () => {
 
   it('uses the default persona and plot while leaving character unset', async () => {
     const config = loadConfig([
-      '--story', 'shibuya_end_fight',
+      '--story', 'story_shibuya_end_fight',
       '--location', 'shibuya',
     ]);
     const content = await loadContent(config);
@@ -132,7 +150,7 @@ describe('loadContent', () => {
 
   it('loads content from the selected story folder', async () => {
     const content = await loadContent({
-      storyDir: path.resolve(process.cwd(), 'shibuya_end_fight'),
+      storyDir: path.resolve(process.cwd(), 'story_shibuya_end_fight'),
       character: 'mahito',
       persona: 'user',
       location: 'shibuya',

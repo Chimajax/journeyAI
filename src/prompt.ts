@@ -8,6 +8,10 @@ export interface Turn {
 }
 
 export type Mode = 'character' | 'narrator';
+export interface CharacterContext {
+  name: string;
+  content: string;
+}
 
 export interface PromptInput {
   mode: Mode;
@@ -18,6 +22,8 @@ export interface PromptInput {
   location: string | null;        // optional — omitted cleanly when null
   plot: string | null;            // optional — omitted cleanly when null
   storyHistory?: string[];
+  characterRoster?: string[];
+  applicableCharacters?: CharacterContext[];
 }
 
 const FORMAT_RULES = `## Format
@@ -65,6 +71,19 @@ ${input.location.trim()}`);
   if (input.plot) {
     sections.push(`## Plot
 ${input.plot.trim()}`);
+  }
+
+  if (input.characterRoster?.length) {
+    sections.push(`## Character Roster
+${input.characterRoster.map((name) => `- ${name}`).join('\n')}
+Only load and use the full details for characters explicitly present or applicable to the current scene.`);
+  }
+
+  if (input.applicableCharacters?.length) {
+    sections.push(`## Applicable Character Details
+${input.applicableCharacters.map((character) =>
+  `### ${character.name}\n${character.content.trim()}`
+).join('\n\n')}`);
   }
 
   if (input.storyHistory?.length) {

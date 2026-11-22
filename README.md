@@ -133,6 +133,17 @@ model, and summary text.
 - `--mode character`: the model is one character.
 - Narrator replies can contain multiple characters.
 
+In narrator mode, the app adds a character roster from `characters/`, then
+loads full `.md`/`.txt` details only for characters named in the current
+message, recent conversation, plot, location, or loaded history. Explicit `--character` use always loads that
+character. This keeps the character folder available without adding every
+character file to every prompt.
+
+The terminal input uses Enter to submit and Shift+Enter to insert a newline
+for terminals that support terminal-enhanced Shift+Enter key sequences. Older
+Windows or terminal configurations may not expose the Shift modifier to Node;
+in that case, end the current line with `\` and press Enter to insert a newline.
+
 ## Tests
 
 ```bash

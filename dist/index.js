@@ -4,7 +4,7 @@ import readline from 'node:readline';
 import { access, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { loadConfig } from './config.js';
-import { listFiles, listLocations, listStoryFolders, loadContent, nextNumberedJsonName, displayName, } from './loaders.js';
+import { listFiles, listLocations, listStoryFolders, loadCharacterCatalog, loadApplicableCharacters, loadContent, nextNumberedJsonName, displayName, } from './loaders.js';
 import { buildSystemPrompt, trimHistory } from './prompt.js';
 import { streamChat } from './chat.js';
 const config = loadConfig();
@@ -195,7 +195,11 @@ async function chooseStoryFolder() {
     if (folders.length === 0) {
         throw new Error('No story folders found. Create a folder for your story and try again.');
     }
-    const defaultFolder = folders.includes('sample_1') ? 'sample_1' : folders[0];
+    const defaultFolder = folders.includes('story_sample_1')
+        ? 'story_sample_1'
+        : folders.includes('sample_1')
+            ? 'sample_1'
+            : folders[0];
     if (!process.stdin.isTTY || !process.stdout.isTTY) {
         config.storyDir = path.resolve(process.cwd(), defaultFolder);
         return;
@@ -297,6 +301,19 @@ async function chooseConversationStarter() {
 // assistant message AND the user message, so history never holds a dangling
 // turn and always alternates cleanly.
 async function runTurn(line, signal) {
+    const recentText = [
+        line,
+        ...history.slice(-6).map((turn) => turn.content),
+        content.plot ?? '',
+        content.location ?? '',
+        ...storyHistory,
+    ].join('\n');
+    const [characterRoster, applicableCharacters] = await Promise.all([
+        loadCharacterCatalog(config.storyDir),
+        config.mode === 'narrator'
+            ? loadApplicableCharacters(config.storyDir, null, recentText)
+            : loadApplicableCharacters(config.storyDir, config.character, recentText),
+    ]);
     const system = buildSystemPrompt({
         mode: config.mode,
         characterName: displayName(config.character),
@@ -306,6 +323,8 @@ async function runTurn(line, signal) {
         location: content.location,
         plot: content.plot,
         storyHistory,
+        characterRoster,
+        applicableCharacters,
     });
     const messages = [
         { role: 'system', content: system },
@@ -499,6 +518,9 @@ const commands = {
 // REPL
 const rl = readline.createInterface({ input: process.stdin, output: process.stdout, prompt: '> ' });
 let abort = null;
+let replStarted = false;
+let inputBuffer = '';
+let inputCursor = 0;
 rl.on('SIGINT', () => {
     // Ctrl+C mid-stream: abort the fetch, discard the partial turn (§12).
     if (abort) {
@@ -517,6 +539,137 @@ rl.on('SIGINT', () => {
         }
     })();
 });
+function redrawInput() {
+    if (!replStarted)
+        return;
+    const beforeCursor = inputBuffer.slice(0, inputCursor);
+    const afterCursor = inputBuffer.slice(inputCursor);
+    process.stdout.write(`\r\x1b[K> ${beforeCursor}${afterCursor}${'\x1b[K'}\r\x1b[${beforeCursor.length + 2}C`);
+}
+function pauseRawInput() {
+    replStarted = false;
+    process.stdin.removeListener('keypress', handleKeypress);
+    if (process.stdin.isTTY && process.stdin.setRawMode)
+        process.stdin.setRawMode(false);
+    process.stdout.write('\r\x1b[K');
+}
+function resumeRawInput() {
+    if (!process.stdin.isTTY || !process.stdin.setRawMode)
+        return;
+    replStarted = true;
+    process.stdin.setRawMode(true);
+    readline.emitKeypressEvents(process.stdin);
+    process.stdin.on('keypress', handleKeypress);
+    redrawInput();
+}
+async function handleInputLine(line) {
+    const trimmed = line.trim();
+    if (trimmed.length === 0) {
+        redrawInput();
+        return;
+    }
+    if (trimmed.startsWith('/')) {
+        pauseRawInput();
+        const [cmd, ...rest] = trimmed.split(/\s+/);
+        const handler = commands[cmd];
+        if (handler) {
+            await Promise.resolve(handler(rest.join(' '))).catch((err) => {
+                console.error(`[journeyai] command failed: ${err?.message ?? err}`);
+            });
+        }
+        else {
+            console.error(`[journeyai] unknown command "${cmd}" — try /help`);
+        }
+        resumeRawInput();
+        return;
+    }
+    process.stdout.write('\n');
+    abort = new AbortController();
+    try {
+        await runTurn(trimmed, abort.signal);
+    }
+    catch (err) {
+        console.error(`[journeyai] error: ${err?.message ?? err}`);
+    }
+    finally {
+        abort = null;
+    }
+    inputBuffer = '';
+    inputCursor = 0;
+    redrawInput();
+}
+async function handleKeypress(_sequence, key) {
+    if (!replStarted)
+        return;
+    if (key?.ctrl && key.name === 'c') {
+        if (abort) {
+            abort.abort();
+            abort = null;
+        }
+        else if (inputBuffer.length === 0) {
+            pauseRawInput();
+            try {
+                await saveSession();
+                process.exit(0);
+            }
+            catch (err) {
+                console.error(`[journeyai] save failed: ${err?.message ?? err}`);
+                resumeRawInput();
+            }
+        }
+        else {
+            inputBuffer = '';
+            inputCursor = 0;
+            redrawInput();
+        }
+        return;
+    }
+    if (key.name === 'return') {
+        if (key.shift) {
+            inputBuffer = inputBuffer.slice(0, inputCursor) + '\n' + inputBuffer.slice(inputCursor);
+            inputCursor += 1;
+            redrawInput();
+            return;
+        }
+        if (inputBuffer.slice(0, inputCursor).endsWith('\\')) {
+            inputCursor -= 1;
+            inputBuffer = inputBuffer.slice(0, inputCursor) + '\n' + inputBuffer.slice(inputCursor + 1);
+            redrawInput();
+            return;
+        }
+        const submitted = inputBuffer;
+        inputBuffer = '';
+        inputCursor = 0;
+        await handleInputLine(submitted);
+        return;
+    }
+    if (key.name === 'backspace') {
+        if (inputCursor > 0) {
+            inputBuffer = inputBuffer.slice(0, inputCursor - 1) + inputBuffer.slice(inputCursor);
+            inputCursor -= 1;
+            redrawInput();
+        }
+        return;
+    }
+    if (key.name === 'left') {
+        inputCursor = Math.max(0, inputCursor - 1);
+        redrawInput();
+        return;
+    }
+    if (key.name === 'right') {
+        inputCursor = Math.min(inputBuffer.length, inputCursor + 1);
+        redrawInput();
+        return;
+    }
+    if (key.ctrl || key.name === 'escape' || key.name === 'up' || key.name === 'down')
+        return;
+    const character = key.sequence ?? _sequence;
+    if (character && character.length > 0) {
+        inputBuffer = inputBuffer.slice(0, inputCursor) + character + inputBuffer.slice(inputCursor);
+        inputCursor += character.length;
+        redrawInput();
+    }
+}
 async function main() {
     if (!config.apiKey) {
         console.error('[journeyai] warning: API_KEY is empty — requests will likely fail');
@@ -534,39 +687,27 @@ async function main() {
     console.log(`You are now playing: ${path.basename(config.storyDir)}`);
     if (!config.session)
         await startRoleplay();
-    rl.prompt();
-    rl.on('line', (line) => {
-        const trimmed = line.trim();
-        if (trimmed.length === 0) {
-            rl.prompt();
-            return;
-        }
-        if (trimmed.startsWith('/')) {
-            const [cmd, ...rest] = trimmed.split(/\s+/);
-            const handler = commands[cmd];
-            if (handler) {
-                Promise.resolve(handler(rest.join(' '))).catch((err) => {
-                    console.error(`[journeyai] command failed: ${err?.message ?? err}`);
-                }).then(() => {
-                    if (rl.terminal)
-                        rl.prompt();
-                });
-            }
-            else {
-                console.error(`[journeyai] unknown command "${cmd}" — try /help`);
-                rl.prompt();
-            }
-            return;
-        }
-        abort = new AbortController();
-        runTurn(trimmed, abort.signal)
-            .catch((err) => console.error(`[journeyai] error: ${err?.message ?? err}`))
-            .finally(() => {
-            abort = null;
-            rl.prompt();
+    if (process.stdin.isTTY && process.stdin.setRawMode) {
+        replStarted = true;
+        process.stdin.setRawMode(true);
+        process.stdin.resume();
+        readline.emitKeypressEvents(process.stdin);
+        process.stdin.on('keypress', handleKeypress);
+        redrawInput();
+    }
+    else {
+        rl.prompt();
+        rl.on('line', (line) => {
+            void handleInputLine(line).finally(() => {
+                if (!replStarted)
+                    rl.prompt();
+            });
         });
+    }
+    rl.on('close', () => {
+        if (!replStarted)
+            process.exit(0);
     });
-    rl.on('close', () => process.exit(0));
 }
 main().catch((err) => {
     console.error(`[journeyai] fatal: ${err?.message ?? err}`);

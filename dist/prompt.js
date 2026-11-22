@@ -35,6 +35,15 @@ ${input.location.trim()}`);
         sections.push(`## Plot
 ${input.plot.trim()}`);
     }
+    if (input.characterRoster?.length) {
+        sections.push(`## Character Roster
+${input.characterRoster.map((name) => `- ${name}`).join('\n')}
+Only load and use the full details for characters explicitly present or applicable to the current scene.`);
+    }
+    if (input.applicableCharacters?.length) {
+        sections.push(`## Applicable Character Details
+${input.applicableCharacters.map((character) => `### ${character.name}\n${character.content.trim()}`).join('\n\n')}`);
+    }
     if (input.storyHistory?.length) {
         sections.push(`## Story So Far
 ${input.storyHistory.join('\n\n')}`);

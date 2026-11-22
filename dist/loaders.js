@@ -25,6 +25,38 @@ export function nextNumberedJsonName(files, prefix) {
         number += 1;
     return `${prefix}${number}.json`;
 }
+function escapeRegExp(value) {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+export async function loadCharacterCatalog(storyDir) {
+    const files = await listFiles(path.join(storyDir, 'characters'), ['.md', '.txt']);
+    return [...new Set(files.map((file) => path.basename(file, path.extname(file))))]
+        .sort((a, b) => a.localeCompare(b));
+}
+export async function loadApplicableCharacters(storyDir, explicitCharacter, recentText) {
+    const catalog = await loadCharacterCatalog(storyDir);
+    const requested = explicitCharacter ? [explicitCharacter] : catalog;
+    const text = recentText.toLowerCase();
+    const contexts = [];
+    for (const stem of requested) {
+        const content = await loadText(path.join(storyDir, 'characters'), stem);
+        if (!content)
+            continue;
+        if (!explicitCharacter) {
+            const heading = content.match(/^#\s+([^\n]+)/m)?.[1].trim();
+            const names = [stem, heading].filter((name) => Boolean(name));
+            const applicable = names.some((name) => {
+                const normalizedName = name.replace(/[-_]+/g, ' ').toLowerCase();
+                const pattern = new RegExp(`(^|[^a-z0-9])${escapeRegExp(normalizedName)}([^a-z0-9]|$)`, 'i');
+                return pattern.test(text);
+            });
+            if (!applicable)
+                continue;
+        }
+        contexts.push({ name: stem, content });
+    }
+    return contexts;
+}
 // The display name of a content file is its filename stem, capitalized
 // (§12: characters are free-form markdown, so there is nothing else to parse).
 export function displayName(stem) {
@@ -33,7 +65,13 @@ export function displayName(stem) {
     const name = stem.replace(/\.(?:md|txt)$/i, '');
     return name.charAt(0).toUpperCase() + name.slice(1);
 }
-const EXCLUDED_STORY_FOLDERS = new Set(['dist', 'node_modules', 'src', 'tests']);
+const EXCLUDED_STORY_FOLDERS = new Set([
+    'dist',
+    'node_modules',
+    'src',
+    'tests',
+    'journeyai',
+]);
 export async function listStoryFolders(rootDir) {
     const entries = await readdir(rootDir, { withFileTypes: true });
     return entries
